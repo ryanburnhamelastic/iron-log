@@ -1,5 +1,6 @@
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { getDb, initDb, headers } from './db';
+import { authenticateRequest } from './auth';
 
 const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod === 'OPTIONS') {
@@ -9,6 +10,9 @@ const handler: Handler = async (event: HandlerEvent) => {
   try {
     await initDb();
     const sql = getDb();
+
+    // Verify Clerk JWT for authenticated requests
+    const authResult = await authenticateRequest(event);
 
     // GET - List exercises or get by ID
     if (event.httpMethod === 'GET') {
@@ -72,8 +76,16 @@ const handler: Handler = async (event: HandlerEvent) => {
       };
     }
 
-    // POST - Create exercise
+    // POST - Create exercise (requires auth)
     if (event.httpMethod === 'POST') {
+      if (!authResult.authenticated) {
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: authResult.error || 'Unauthorized' }),
+        };
+      }
+
       const body = JSON.parse(event.body || '{}');
       const { name, category, equipment, description } = body;
 

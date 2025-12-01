@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { useUser } from '@clerk/clerk-react';
-import { usersApi } from '../lib/api';
+import { useUser, useAuth } from '@clerk/clerk-react';
+import { usersApi, setAuthTokenGetter } from '../lib/api';
 import type { User } from '../types';
 
 interface AuthContextType {
@@ -17,8 +17,21 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { isLoaded: clerkLoaded, isSignedIn, user: clerkUser } = useUser();
+  const { getToken } = useAuth();
   const [user, setUser] = useState<User | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+
+  // Set up the auth token getter for API calls
+  useEffect(() => {
+    setAuthTokenGetter(async () => {
+      if (!isSignedIn) return null;
+      try {
+        return await getToken();
+      } catch {
+        return null;
+      }
+    });
+  }, [isSignedIn, getToken]);
 
   const fetchOrCreateUser = async () => {
     if (!isSignedIn || !clerkUser) {
@@ -61,8 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    if (clerkLoaded) {
+    if (clerkLoaded && isSignedIn) {
       fetchOrCreateUser();
+    } else if (clerkLoaded) {
+      setIsLoaded(true);
     }
   }, [clerkLoaded, isSignedIn, clerkUser?.id]);
 

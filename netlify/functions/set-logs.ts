@@ -1,5 +1,6 @@
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { getDb, initDb, headers } from './db';
+import { authenticateRequest } from './auth';
 
 const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod === 'OPTIONS') {
@@ -9,6 +10,17 @@ const handler: Handler = async (event: HandlerEvent) => {
   try {
     await initDb();
     const sql = getDb();
+
+    // Verify Clerk JWT
+    const authResult = await authenticateRequest(event);
+
+    if (!authResult.authenticated) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ error: authResult.error || 'Unauthorized' }),
+      };
+    }
 
     const pathParts = event.path.split('/').filter(Boolean);
     const setLogId = pathParts.length > 1 ? pathParts[pathParts.length - 1] : null;

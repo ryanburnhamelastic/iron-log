@@ -1,5 +1,6 @@
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { getDb, initDb, headers } from './db';
+import { authenticateRequest } from './auth';
 
 const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod === 'OPTIONS') {
@@ -10,8 +11,9 @@ const handler: Handler = async (event: HandlerEvent) => {
     await initDb();
     const sql = getDb();
 
-    const authHeader = event.headers.authorization;
-    const clerkUserId = authHeader?.replace('Bearer ', '') || event.headers['x-clerk-user-id'];
+    // Verify Clerk JWT for authenticated requests
+    const authResult = await authenticateRequest(event);
+    const clerkUserId = authResult.clerkUserId;
 
     // GET - List programs or get by ID
     if (event.httpMethod === 'GET') {

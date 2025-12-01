@@ -1,5 +1,6 @@
 import type { Handler, HandlerEvent } from '@netlify/functions';
 import { getDb, initDb, headers } from './db';
+import { authenticateRequest } from './auth';
 import * as XLSX from 'xlsx';
 
 interface ParsedExercise {
@@ -300,18 +301,24 @@ const handler: Handler = async (event: HandlerEvent) => {
     await initDb();
     const sql = getDb();
 
-    const authHeader = event.headers.authorization;
-    const clerkUserId = authHeader?.replace('Bearer ', '') || event.headers['x-clerk-user-id'];
+    // Verify Clerk JWT and get user ID
+    const authResult = await authenticateRequest(event);
 
-    // Get user ID
+    if (!authResult.authenticated || !authResult.clerkUserId) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ error: authResult.error || 'Unauthorized' }),
+      };
+    }
+
+    // Get user ID from database
     let userId = null;
-    if (clerkUserId) {
-      const user = await sql`
-        SELECT id FROM users WHERE clerk_user_id = ${clerkUserId}
-      `;
-      if (user.length > 0) {
-        userId = user[0].id;
-      }
+    const user = await sql`
+      SELECT id FROM users WHERE clerk_user_id = ${authResult.clerkUserId}
+    `;
+    if (user.length > 0) {
+      userId = user[0].id;
     }
 
     // Parse the multipart form data
