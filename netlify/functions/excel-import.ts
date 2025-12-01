@@ -485,13 +485,16 @@ const handler: Handler = async (event: HandlerEvent) => {
       }),
     };
   } catch (error) {
-    console.error('Excel import error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : '';
+    console.error('Excel import error:', errorMessage);
+    console.error('Stack trace:', errorStack);
     return {
       statusCode: 500,
       headers,
       body: JSON.stringify({
         error: 'Failed to import program',
-        details: error instanceof Error ? error.message : 'Unknown error',
+        details: errorMessage,
       }),
     };
   }
