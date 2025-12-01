@@ -177,11 +177,12 @@ const handler: Handler = async (event: HandlerEvent) => {
       body: JSON.stringify({ error: 'Method not allowed' }),
     };
   } catch (error) {
-    console.error('User programs API error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('User programs API error:', errorMessage, error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: 'Internal server error' }),
+      body: JSON.stringify({ error: 'Internal server error', details: errorMessage }),
     };
   }
 };

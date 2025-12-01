@@ -454,6 +454,84 @@ const handler: Handler = async (event: HandlerEvent) => {
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const parsedProgram = parseMinMaxProgram(workbook);
 
+    // OPTIMIZED: Collect all unique exercises first to minimize DB round-trips
+    const allExerciseNames = new Set<string>();
+    const allSubstitutionNames = new Set<string>();
+
+    for (const parsedBlock of parsedProgram.blocks) {
+      for (const parsedWeek of parsedBlock.weeks) {
+        for (const parsedWorkout of parsedWeek.workouts) {
+          for (const ex of parsedWorkout.exercises) {
+            allExerciseNames.add(ex.name.toLowerCase());
+            for (const sub of ex.substitutions) {
+              allSubstitutionNames.add(sub.toLowerCase());
+            }
+          }
+        }
+      }
+    }
+
+    // Combine all exercise names (main + substitutions)
+    const allNames = new Set([...allExerciseNames, ...allSubstitutionNames]);
+
+    // Get all existing exercises in one query
+    const existingExercises = await sql`
+      SELECT id, LOWER(name) as lower_name, name FROM exercises
+      WHERE LOWER(name) = ANY(${[...allNames]})
+    `;
+
+    const exerciseMap = new Map<string, { id: string; name: string }>();
+    for (const ex of existingExercises) {
+      exerciseMap.set(ex.lower_name, { id: ex.id, name: ex.name });
+    }
+
+    // Find exercises that need to be created
+    const exercisesToCreate: { name: string; category: string | null }[] = [];
+    for (const name of allNames) {
+      if (!exerciseMap.has(name)) {
+        // Find the original cased name
+        let originalName = name;
+        for (const parsedBlock of parsedProgram.blocks) {
+          for (const parsedWeek of parsedBlock.weeks) {
+            for (const parsedWorkout of parsedWeek.workouts) {
+              for (const ex of parsedWorkout.exercises) {
+                if (ex.name.toLowerCase() === name) {
+                  originalName = ex.name;
+                  break;
+                }
+                for (const sub of ex.substitutions) {
+                  if (sub.toLowerCase() === name) {
+                    originalName = sub;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        exercisesToCreate.push({
+          name: originalName,
+          category: categorizeExercise(originalName),
+        });
+      }
+    }
+
+    // Batch insert new exercises if any
+    if (exercisesToCreate.length > 0) {
+      const newExercises = await sql`
+        INSERT INTO exercises (name, category)
+        SELECT * FROM UNNEST(
+          ${exercisesToCreate.map(e => e.name)}::text[],
+          ${exercisesToCreate.map(e => e.category)}::text[]
+        ) AS t(name, category)
+        RETURNING id, LOWER(name) as lower_name, name
+      `;
+
+      for (const ex of newExercises) {
+        exerciseMap.set(ex.lower_name, { id: ex.id, name: ex.name });
+      }
+    }
+
     // Create program in database
     const [program] = await sql`
       INSERT INTO programs (name, description, frequency_per_week, source, created_by)
@@ -467,92 +545,198 @@ const handler: Handler = async (event: HandlerEvent) => {
       RETURNING *
     `;
 
-    // Create blocks, weeks, workouts, and exercises
+    // Batch insert all blocks
+    const blockInserts = parsedProgram.blocks.map(b => ({
+      program_id: program.id,
+      block_number: b.blockNumber,
+      name: b.name,
+      sort_order: b.blockNumber,
+    }));
+
+    const blocks = await sql`
+      INSERT INTO program_blocks (program_id, block_number, name, sort_order)
+      SELECT * FROM UNNEST(
+        ${blockInserts.map(b => b.program_id)}::uuid[],
+        ${blockInserts.map(b => b.block_number)}::int[],
+        ${blockInserts.map(b => b.name)}::text[],
+        ${blockInserts.map(b => b.sort_order)}::int[]
+      ) AS t(program_id, block_number, name, sort_order)
+      RETURNING *
+    `;
+
+    // Create block ID mapping
+    const blockMap = new Map<number, string>();
+    for (const block of blocks) {
+      blockMap.set(block.block_number, block.id);
+    }
+
+    // Batch insert all weeks
+    const weekInserts: { block_id: string; week_number: number; name: string; week_type: string; sort_order: number }[] = [];
     for (const parsedBlock of parsedProgram.blocks) {
-      const [block] = await sql`
-        INSERT INTO program_blocks (program_id, block_number, name, sort_order)
-        VALUES (${program.id}, ${parsedBlock.blockNumber}, ${parsedBlock.name}, ${parsedBlock.blockNumber})
-        RETURNING *
-      `;
-
+      const blockId = blockMap.get(parsedBlock.blockNumber)!;
       for (const parsedWeek of parsedBlock.weeks) {
-        const [week] = await sql`
-          INSERT INTO block_weeks (block_id, week_number, name, week_type, sort_order)
-          VALUES (${block.id}, ${parsedWeek.weekNumber}, ${parsedWeek.name}, ${parsedWeek.weekType}, ${parsedWeek.weekNumber})
-          RETURNING *
-        `;
+        weekInserts.push({
+          block_id: blockId,
+          week_number: parsedWeek.weekNumber,
+          name: parsedWeek.name,
+          week_type: parsedWeek.weekType,
+          sort_order: parsedWeek.weekNumber,
+        });
+      }
+    }
 
+    const weeks = await sql`
+      INSERT INTO block_weeks (block_id, week_number, name, week_type, sort_order)
+      SELECT * FROM UNNEST(
+        ${weekInserts.map(w => w.block_id)}::uuid[],
+        ${weekInserts.map(w => w.week_number)}::int[],
+        ${weekInserts.map(w => w.name)}::text[],
+        ${weekInserts.map(w => w.week_type)}::text[],
+        ${weekInserts.map(w => w.sort_order)}::int[]
+      ) AS t(block_id, week_number, name, week_type, sort_order)
+      RETURNING *
+    `;
+
+    // Create week ID mapping (block_id + week_number -> week_id)
+    const weekMap = new Map<string, string>();
+    for (const week of weeks) {
+      weekMap.set(`${week.block_id}-${week.week_number}`, week.id);
+    }
+
+    // Batch insert all workouts
+    const workoutInserts: { week_id: string; name: string; day_number: number; sort_order: number; block_num: number; week_num: number }[] = [];
+    for (const parsedBlock of parsedProgram.blocks) {
+      const blockId = blockMap.get(parsedBlock.blockNumber)!;
+      for (const parsedWeek of parsedBlock.weeks) {
+        const weekId = weekMap.get(`${blockId}-${parsedWeek.weekNumber}`)!;
         for (const parsedWorkout of parsedWeek.workouts) {
-          const [workout] = await sql`
-            INSERT INTO workout_templates (week_id, name, day_number, sort_order)
-            VALUES (${week.id}, ${parsedWorkout.name}, ${parsedWorkout.dayNumber}, ${parsedWorkout.dayNumber})
-            RETURNING *
-          `;
+          workoutInserts.push({
+            week_id: weekId,
+            name: parsedWorkout.name,
+            day_number: parsedWorkout.dayNumber,
+            sort_order: parsedWorkout.dayNumber,
+            block_num: parsedBlock.blockNumber,
+            week_num: parsedWeek.weekNumber,
+          });
+        }
+      }
+    }
+
+    const workouts = await sql`
+      INSERT INTO workout_templates (week_id, name, day_number, sort_order)
+      SELECT * FROM UNNEST(
+        ${workoutInserts.map(w => w.week_id)}::uuid[],
+        ${workoutInserts.map(w => w.name)}::text[],
+        ${workoutInserts.map(w => w.day_number)}::int[],
+        ${workoutInserts.map(w => w.sort_order)}::int[]
+      ) AS t(week_id, name, day_number, sort_order)
+      RETURNING *
+    `;
+
+    // Create workout ID mapping (week_id + day_number -> workout_id)
+    const workoutMap = new Map<string, string>();
+    for (const workout of workouts) {
+      workoutMap.set(`${workout.week_id}-${workout.day_number}`, workout.id);
+    }
+
+    // Batch insert all template exercises
+    const templateExerciseInserts: {
+      workout_template_id: string;
+      exercise_id: string;
+      exercise_order: number;
+      warmup_sets: number;
+      working_sets: number;
+      rep_range_min: number;
+      rep_range_max: number;
+      rir: number | null;
+      rest_seconds: number;
+      notes: string | null;
+    }[] = [];
+
+    // Track substitutions to batch insert
+    const substitutionPairs: { primary_id: string; substitute_id: string }[] = [];
+
+    for (const parsedBlock of parsedProgram.blocks) {
+      const blockId = blockMap.get(parsedBlock.blockNumber)!;
+      for (const parsedWeek of parsedBlock.weeks) {
+        const weekId = weekMap.get(`${blockId}-${parsedWeek.weekNumber}`)!;
+        for (const parsedWorkout of parsedWeek.workouts) {
+          const workoutId = workoutMap.get(`${weekId}-${parsedWorkout.dayNumber}`)!;
 
           for (let i = 0; i < parsedWorkout.exercises.length; i++) {
             const parsedExercise = parsedWorkout.exercises[i];
+            const exerciseData = exerciseMap.get(parsedExercise.name.toLowerCase());
 
-            // Find or create exercise in library
-            let exerciseResult = await sql`
-              SELECT * FROM exercises WHERE LOWER(name) = LOWER(${parsedExercise.name})
-            `;
+            if (exerciseData) {
+              templateExerciseInserts.push({
+                workout_template_id: workoutId,
+                exercise_id: exerciseData.id,
+                exercise_order: i + 1,
+                warmup_sets: parsedExercise.warmupSets,
+                working_sets: parsedExercise.workingSets,
+                rep_range_min: parsedExercise.repRangeMin,
+                rep_range_max: parsedExercise.repRangeMax,
+                rir: parsedExercise.rir,
+                rest_seconds: parsedExercise.restSeconds,
+                notes: parsedExercise.notes,
+              });
 
-            if (exerciseResult.length === 0) {
-              exerciseResult = await sql`
-                INSERT INTO exercises (name, category)
-                VALUES (${parsedExercise.name}, ${parsedExercise.category})
-                RETURNING *
-              `;
-            }
-
-            const exercise = exerciseResult[0];
-
-            // Create template exercise
-            await sql`
-              INSERT INTO template_exercises (
-                workout_template_id, exercise_id, exercise_order,
-                warmup_sets, working_sets, rep_range_min, rep_range_max,
-                rir, rest_seconds, notes
-              )
-              VALUES (
-                ${workout.id}, ${exercise.id}, ${i + 1},
-                ${parsedExercise.warmupSets}, ${parsedExercise.workingSets},
-                ${parsedExercise.repRangeMin}, ${parsedExercise.repRangeMax},
-                ${parsedExercise.rir}, ${parsedExercise.restSeconds},
-                ${parsedExercise.notes}
-              )
-            `;
-
-            // Create substitutions
-            for (const subName of parsedExercise.substitutions) {
-              let subResult = await sql`
-                SELECT * FROM exercises WHERE LOWER(name) = LOWER(${subName})
-              `;
-
-              if (subResult.length === 0) {
-                subResult = await sql`
-                  INSERT INTO exercises (name, category)
-                  VALUES (${subName}, ${categorizeExercise(subName)})
-                  RETURNING *
-                `;
-              }
-
-              const subExercise = subResult[0];
-
-              // Create substitution link (ignore if already exists)
-              try {
-                await sql`
-                  INSERT INTO exercise_substitutions (primary_exercise_id, substitute_exercise_id)
-                  VALUES (${exercise.id}, ${subExercise.id})
-                  ON CONFLICT DO NOTHING
-                `;
-              } catch {
-                // Ignore duplicate errors
+              // Collect substitutions
+              for (const subName of parsedExercise.substitutions) {
+                const subData = exerciseMap.get(subName.toLowerCase());
+                if (subData) {
+                  substitutionPairs.push({
+                    primary_id: exerciseData.id,
+                    substitute_id: subData.id,
+                  });
+                }
               }
             }
           }
         }
       }
+    }
+
+    // Batch insert template exercises
+    if (templateExerciseInserts.length > 0) {
+      await sql`
+        INSERT INTO template_exercises (
+          workout_template_id, exercise_id, exercise_order,
+          warmup_sets, working_sets, rep_range_min, rep_range_max,
+          rir, rest_seconds, notes
+        )
+        SELECT * FROM UNNEST(
+          ${templateExerciseInserts.map(e => e.workout_template_id)}::uuid[],
+          ${templateExerciseInserts.map(e => e.exercise_id)}::uuid[],
+          ${templateExerciseInserts.map(e => e.exercise_order)}::int[],
+          ${templateExerciseInserts.map(e => e.warmup_sets)}::int[],
+          ${templateExerciseInserts.map(e => e.working_sets)}::int[],
+          ${templateExerciseInserts.map(e => e.rep_range_min)}::int[],
+          ${templateExerciseInserts.map(e => e.rep_range_max)}::int[],
+          ${templateExerciseInserts.map(e => e.rir)}::int[],
+          ${templateExerciseInserts.map(e => e.rest_seconds)}::int[],
+          ${templateExerciseInserts.map(e => e.notes)}::text[]
+        ) AS t(workout_template_id, exercise_id, exercise_order, warmup_sets, working_sets, rep_range_min, rep_range_max, rir, rest_seconds, notes)
+      `;
+    }
+
+    // Batch insert substitutions (deduplicate first)
+    const uniqueSubs = new Map<string, { primary_id: string; substitute_id: string }>();
+    for (const sub of substitutionPairs) {
+      const key = `${sub.primary_id}-${sub.substitute_id}`;
+      uniqueSubs.set(key, sub);
+    }
+
+    const subsToInsert = [...uniqueSubs.values()];
+    if (subsToInsert.length > 0) {
+      await sql`
+        INSERT INTO exercise_substitutions (primary_exercise_id, substitute_exercise_id)
+        SELECT * FROM UNNEST(
+          ${subsToInsert.map(s => s.primary_id)}::uuid[],
+          ${subsToInsert.map(s => s.substitute_id)}::uuid[]
+        ) AS t(primary_exercise_id, substitute_exercise_id)
+        ON CONFLICT DO NOTHING
+      `;
     }
 
     return {
