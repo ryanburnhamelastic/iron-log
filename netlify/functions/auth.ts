@@ -1,4 +1,4 @@
-import { verifyToken } from '@clerk/backend';
+import { createClerkClient } from '@clerk/backend';
 import type { HandlerEvent } from '@netlify/functions';
 
 export interface AuthResult {
@@ -32,11 +32,12 @@ export async function authenticateRequest(event: HandlerEvent): Promise<AuthResu
       };
     }
 
-    const verifiedToken = await verifyToken(token, {
-      secretKey,
-    });
+    const clerk = createClerkClient({ secretKey });
 
-    if (!verifiedToken.sub) {
+    // Verify the session token
+    const { sub } = await clerk.verifyToken(token);
+
+    if (!sub) {
       return {
         authenticated: false,
         clerkUserId: null,
@@ -46,7 +47,7 @@ export async function authenticateRequest(event: HandlerEvent): Promise<AuthResu
 
     return {
       authenticated: true,
-      clerkUserId: verifiedToken.sub,
+      clerkUserId: sub,
     };
   } catch (error) {
     console.error('Token verification failed:', error);
