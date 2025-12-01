@@ -88,6 +88,66 @@ function categorizeExercise(name: string): string | null {
   return null;
 }
 
+// Excel date serial number to rep range mapping (common patterns in Min-Max)
+const EXCEL_DATE_TO_REP_RANGE: Record<number, [number, number]> = {
+  45816: [6, 8],
+  45879: [10, 12],
+  45847: [8, 10],
+  45785: [4, 6],
+  45910: [12, 15],
+};
+
+function parseRepRange(value: string | number | undefined): [number, number] {
+  if (!value) return [8, 12];
+
+  // If it's a number, it might be an Excel date serial
+  if (typeof value === 'number') {
+    if (EXCEL_DATE_TO_REP_RANGE[value]) {
+      return EXCEL_DATE_TO_REP_RANGE[value];
+    }
+    // Try to interpret as a single rep count
+    if (value >= 1 && value <= 30) {
+      return [value, value];
+    }
+    return [8, 12]; // Default
+  }
+
+  const str = String(value);
+  // Try to match "X-Y" pattern
+  const rangeMatch = str.match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (rangeMatch) {
+    return [parseInt(rangeMatch[1]), parseInt(rangeMatch[2])];
+  }
+
+  // Try single number
+  const singleMatch = str.match(/^(\d+)$/);
+  if (singleMatch) {
+    const num = parseInt(singleMatch[1]);
+    return [num, num];
+  }
+
+  return [8, 12]; // Default
+}
+
+function parseWarmupSets(value: string | number | undefined): number {
+  if (!value) return 0;
+
+  const str = String(value);
+  // Match patterns like "1-2", "0-1", "2-3"
+  const rangeMatch = str.match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (rangeMatch) {
+    return parseInt(rangeMatch[1]); // Use the lower bound
+  }
+
+  // Single number
+  const num = parseInt(str);
+  if (!isNaN(num) && num >= 0 && num <= 5) {
+    return num;
+  }
+
+  return 0;
+}
+
 function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
   const program: ParsedProgram = {
     name: 'Min-Max Program',
@@ -111,6 +171,7 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
   let currentWeek: ParsedWeek | null = null;
   let currentWorkout: ParsedWorkout | null = null;
   let exerciseOrder = 0;
+  let isInHeaderRow = false;
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
@@ -118,46 +179,84 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
 
     const firstCell = String(row[0] || '').trim();
     const secondCell = String(row[1] || '').trim();
+    const lowerFirst = firstCell.toLowerCase();
+    const lowerSecond = secondCell.toLowerCase();
 
-    // Detect Block headers
-    if (secondCell.toLowerCase().includes('block')) {
-      const blockNum = parseInt(secondCell.match(/\d+/)?.[0] || '1');
-      currentBlock = {
-        blockNumber: blockNum,
-        name: secondCell,
-        weeks: [],
-      };
-      program.blocks.push(currentBlock);
+    // Skip program notes and copyright rows
+    if (
+      lowerFirst.includes('important program notes') ||
+      lowerFirst.includes('the min-max program') ||
+      lowerSecond.includes('copyright') ||
+      lowerFirst.includes('warm-up protocol') ||
+      lowerSecond.includes('warm-up protocol')
+    ) {
       continue;
     }
 
-    // Detect Week headers
-    if (secondCell.toLowerCase().includes('week')) {
+    // Detect Block headers (in column A)
+    if (lowerFirst.includes('block') && !lowerFirst.includes('exercise')) {
+      const blockNum = parseInt(firstCell.match(/\d+/)?.[0] || String(program.blocks.length + 1));
+      currentBlock = {
+        blockNumber: blockNum,
+        name: firstCell,
+        weeks: [],
+      };
+      program.blocks.push(currentBlock);
+      currentWeek = null;
+      currentWorkout = null;
+      continue;
+    }
+
+    // Detect Week headers (in column A) - includes "Intro Week", "Week 1", "Deload Week"
+    if (
+      (lowerFirst.includes('week') || lowerFirst.includes('intro')) &&
+      !lowerFirst.includes('per week') &&
+      !lowerSecond.includes('exercise')
+    ) {
       if (!currentBlock) {
         currentBlock = { blockNumber: 1, name: 'Block 1', weeks: [] };
         program.blocks.push(currentBlock);
       }
 
-      const weekNum = parseInt(secondCell.match(/\d+/)?.[0] || '1');
+      const weekNum = parseInt(firstCell.match(/\d+/)?.[0] || String(currentBlock.weeks.length + 1));
       let weekType: 'intro' | 'normal' | 'deload' = 'normal';
-      const lowerSecond = secondCell.toLowerCase();
-      if (lowerSecond.includes('intro')) weekType = 'intro';
-      if (lowerSecond.includes('deload')) weekType = 'deload';
+      if (lowerFirst.includes('intro')) weekType = 'intro';
+      if (lowerFirst.includes('deload')) weekType = 'deload';
 
       currentWeek = {
         weekNumber: weekNum,
-        name: secondCell,
+        name: firstCell,
         weekType,
         workouts: [],
       };
       currentBlock.weeks.push(currentWeek);
+      currentWorkout = null;
       continue;
     }
 
-    // Detect workout day headers (Full Body, Upper, Lower, Arms/Delts)
-    const workoutNames = ['full body', 'upper', 'lower', 'arms', 'push', 'pull', 'legs'];
-    const lowerSecond = secondCell.toLowerCase();
-    if (workoutNames.some((w) => lowerSecond.includes(w))) {
+    // Skip header rows that define columns
+    if (lowerSecond === 'exercise' || lowerSecond.includes('tracking load')) {
+      isInHeaderRow = true;
+      continue;
+    }
+    if (lowerSecond === 'load' || lowerSecond.includes('rir (set')) {
+      isInHeaderRow = true;
+      continue;
+    }
+    if (lowerFirst === 'set 1' || lowerFirst === 'set 2' || lowerSecond === 'set 1') {
+      isInHeaderRow = true;
+      continue;
+    }
+    isInHeaderRow = false;
+
+    // Detect rest day markers
+    if (lowerFirst.includes('rest day') || lowerSecond.includes('rest day')) {
+      continue;
+    }
+
+    // Detect workout day headers (Full Body, Upper, Lower, Arms/Delts) - in column A
+    const workoutNames = ['full body', 'upper', 'lower', 'arms', 'arms/delts', 'push', 'pull', 'legs'];
+    if (workoutNames.some((w) => lowerFirst === w || lowerFirst.startsWith(w + ' '))) {
       if (!currentWeek) {
         if (!currentBlock) {
           currentBlock = { blockNumber: 1, name: 'Block 1', weeks: [] };
@@ -173,35 +272,78 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
       }
 
       currentWorkout = {
-        name: secondCell,
+        name: firstCell,
         dayNumber: currentWeek.workouts.length + 1,
         exercises: [],
       };
       currentWeek.workouts.push(currentWorkout);
       exerciseOrder = 0;
+
+      // The first exercise might be on the same row as the workout name
+      if (secondCell && !lowerSecond.includes('exercise') && !isInHeaderRow) {
+        const [repMin, repMax] = parseRepRange(row[6]);
+        const warmupSets = parseWarmupSets(row[4]);
+
+        let workingSets = 2;
+        if (row[5]) {
+          const setsVal = parseInt(String(row[5]));
+          if (!isNaN(setsVal) && setsVal > 0 && setsVal < 10) {
+            workingSets = setsVal;
+          }
+        }
+
+        let rir: number | null = null;
+        const rirCol1 = row[11];
+        if (typeof rirCol1 === 'number' && rirCol1 >= 0 && rirCol1 <= 4) {
+          rir = rirCol1;
+        }
+
+        let restSeconds = 120;
+        const restCell = String(row[13] || '');
+        const restMatch = restCell.match(/(\d+)\s*[-–]?\s*(\d*)\s*min/);
+        if (restMatch) {
+          restSeconds = parseInt(restMatch[1]) * 60;
+        }
+
+        const substitutions: string[] = [];
+        if (row[14] && String(row[14]).trim() && !String(row[14]).toLowerCase().includes('see notes')) {
+          substitutions.push(String(row[14]).trim());
+        }
+        if (row[15] && String(row[15]).trim() && !String(row[15]).toLowerCase().includes('see notes')) {
+          substitutions.push(String(row[15]).trim());
+        }
+
+        exerciseOrder++;
+        currentWorkout.exercises.push({
+          name: secondCell,
+          warmupSets,
+          workingSets,
+          repRangeMin: repMin,
+          repRangeMax: repMax,
+          rir,
+          restSeconds,
+          notes: row[16] ? String(row[16]).trim() : null,
+          substitutions,
+          category: categorizeExercise(secondCell),
+        });
+      }
       continue;
     }
 
-    // Detect rest day markers
-    if (lowerSecond.includes('rest day')) {
-      continue;
-    }
-
-    // Parse exercise rows - look for exercise name pattern
-    // Skip header rows (containing "Exercise", "Load", "Reps", etc.)
+    // Parse exercise rows - exercise name in column B
     if (
       secondCell &&
+      currentWorkout &&
+      !isInHeaderRow &&
       !lowerSecond.includes('exercise') &&
       !lowerSecond.includes('load') &&
-      !lowerSecond.includes('reps') &&
+      lowerSecond !== 'reps' &&
       !lowerSecond.includes('set 1') &&
-      !lowerSecond.includes('set 2') &&
-      currentWorkout
+      !lowerSecond.includes('tracking')
     ) {
-      // This looks like an exercise row
-      const exerciseName = secondCell;
+      const [repMin, repMax] = parseRepRange(row[6]);
+      const warmupSets = parseWarmupSets(row[4]);
 
-      // Parse working sets (column index ~5)
       let workingSets = 2;
       if (row[5]) {
         const setsVal = parseInt(String(row[5]));
@@ -210,44 +352,19 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
         }
       }
 
-      // Parse rep range (column index ~6) - might be a date or range string
-      let repMin = 8;
-      let repMax = 12;
-      const repCell = String(row[6] || '');
-      const repMatch = repCell.match(/(\d+)\s*[-–]\s*(\d+)/);
-      if (repMatch) {
-        repMin = parseInt(repMatch[1]);
-        repMax = parseInt(repMatch[2]);
-      } else if (repCell.includes('2025')) {
-        // Date format from Excel - try to parse differently
-        // This appears to be a date bug in the Excel file
-        repMin = 6;
-        repMax = 8;
-      }
-
-      // Parse RIR from failure columns (columns ~11, 12)
       let rir: number | null = null;
       const rirCol1 = row[11];
-      const rirCol2 = row[12];
       if (typeof rirCol1 === 'number' && rirCol1 >= 0 && rirCol1 <= 4) {
         rir = rirCol1;
-      } else if (typeof rirCol2 === 'number' && rirCol2 >= 0 && rirCol2 <= 4) {
-        rir = rirCol2;
       }
 
-      // Parse rest time (column ~13)
       let restSeconds = 120;
       const restCell = String(row[13] || '');
       const restMatch = restCell.match(/(\d+)\s*[-–]?\s*(\d*)\s*min/);
       if (restMatch) {
-        const minRest = parseInt(restMatch[1]);
-        restSeconds = minRest * 60;
+        restSeconds = parseInt(restMatch[1]) * 60;
       }
 
-      // Parse notes (column ~16)
-      const notes = row[16] ? String(row[16]).trim() : null;
-
-      // Parse substitutions (columns ~14, 15)
       const substitutions: string[] = [];
       if (row[14] && String(row[14]).trim() && !String(row[14]).toLowerCase().includes('see notes')) {
         substitutions.push(String(row[14]).trim());
@@ -256,27 +373,18 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
         substitutions.push(String(row[15]).trim());
       }
 
-      // Parse warmup sets (column ~3 or 4)
-      let warmupSets = 0;
-      const warmupCell = String(row[3] || row[4] || '');
-      const warmupMatch = warmupCell.match(/(\d+)/);
-      if (warmupMatch) {
-        warmupSets = parseInt(warmupMatch[1]);
-        if (warmupSets > 5) warmupSets = 0; // Likely not warmup sets
-      }
-
       exerciseOrder++;
       currentWorkout.exercises.push({
-        name: exerciseName,
+        name: secondCell,
         warmupSets,
         workingSets,
         repRangeMin: repMin,
         repRangeMax: repMax,
         rir,
         restSeconds,
-        notes,
+        notes: row[16] ? String(row[16]).trim() : null,
         substitutions,
-        category: categorizeExercise(exerciseName),
+        category: categorizeExercise(secondCell),
       });
     }
   }
