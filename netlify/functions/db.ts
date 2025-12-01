@@ -1,0 +1,249 @@
+import { neon } from '@neondatabase/serverless';
+
+let dbInitialized = false;
+
+export function getDb() {
+  const databaseUrl = process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('Database URL not configured. Set DATABASE_URL environment variable.');
+  }
+  return neon(databaseUrl);
+}
+
+export async function initDb() {
+  if (dbInitialized) return;
+
+  const sql = getDb();
+
+  // Users table
+  await sql`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      clerk_user_id TEXT UNIQUE NOT NULL,
+      email TEXT NOT NULL,
+      first_name TEXT,
+      last_name TEXT,
+      preferred_unit TEXT DEFAULT 'imperial' CHECK (preferred_unit IN ('imperial', 'metric')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_user_id)`;
+
+  // Body weight tracking
+  await sql`
+    CREATE TABLE IF NOT EXISTS body_weight_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      weight_value DECIMAL(5, 2) NOT NULL,
+      unit TEXT DEFAULT 'lbs' CHECK (unit IN ('lbs', 'kg')),
+      logged_at DATE NOT NULL DEFAULT CURRENT_DATE,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, logged_at)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_body_weight_user_id ON body_weight_logs(user_id)`;
+
+  // Programs
+  await sql`
+    CREATE TABLE IF NOT EXISTS programs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      description TEXT,
+      frequency_per_week INTEGER DEFAULT 4,
+      source TEXT,
+      created_by UUID REFERENCES users(id),
+      is_template BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  // Program blocks
+  await sql`
+    CREATE TABLE IF NOT EXISTS program_blocks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      program_id UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+      block_number INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(program_id, block_number)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_program_blocks_program_id ON program_blocks(program_id)`;
+
+  // Block weeks
+  await sql`
+    CREATE TABLE IF NOT EXISTS block_weeks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      block_id UUID NOT NULL REFERENCES program_blocks(id) ON DELETE CASCADE,
+      week_number INTEGER NOT NULL,
+      name TEXT,
+      week_type TEXT DEFAULT 'normal' CHECK (week_type IN ('intro', 'normal', 'deload')),
+      sort_order INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(block_id, week_number)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_block_weeks_block_id ON block_weeks(block_id)`;
+
+  // Workout templates
+  await sql`
+    CREATE TABLE IF NOT EXISTS workout_templates (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      week_id UUID NOT NULL REFERENCES block_weeks(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      day_number INTEGER NOT NULL,
+      notes TEXT,
+      sort_order INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(week_id, day_number)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_workout_templates_week_id ON workout_templates(week_id)`;
+
+  // Exercise library
+  await sql`
+    CREATE TABLE IF NOT EXISTS exercises (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      category TEXT,
+      equipment TEXT,
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_exercises_category ON exercises(category)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_exercises_name ON exercises(name)`;
+
+  // Exercise substitutions
+  await sql`
+    CREATE TABLE IF NOT EXISTS exercise_substitutions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      primary_exercise_id UUID NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+      substitute_exercise_id UUID NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(primary_exercise_id, substitute_exercise_id)
+    )
+  `;
+
+  // Template exercises
+  await sql`
+    CREATE TABLE IF NOT EXISTS template_exercises (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workout_template_id UUID NOT NULL REFERENCES workout_templates(id) ON DELETE CASCADE,
+      exercise_id UUID NOT NULL REFERENCES exercises(id),
+      exercise_order INTEGER NOT NULL,
+      warmup_sets INTEGER DEFAULT 0,
+      working_sets INTEGER NOT NULL,
+      rep_range_min INTEGER NOT NULL,
+      rep_range_max INTEGER NOT NULL,
+      rir INTEGER,
+      rest_seconds INTEGER DEFAULT 120,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_template_exercises_template ON template_exercises(workout_template_id)`;
+
+  // User programs
+  await sql`
+    CREATE TABLE IF NOT EXISTS user_programs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      program_id UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+      started_at DATE NOT NULL DEFAULT CURRENT_DATE,
+      completed_at DATE,
+      is_active BOOLEAN DEFAULT true,
+      current_block_id UUID REFERENCES program_blocks(id),
+      current_week_id UUID REFERENCES block_weeks(id),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_user_programs_user_id ON user_programs(user_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_user_programs_active ON user_programs(is_active)`;
+
+  // User schedules
+  await sql`
+    CREATE TABLE IF NOT EXISTS user_schedules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+      is_workout_day BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, day_of_week)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_user_schedules_user_id ON user_schedules(user_id)`;
+
+  // Workout logs
+  await sql`
+    CREATE TABLE IF NOT EXISTS workout_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_program_id UUID REFERENCES user_programs(id),
+      workout_template_id UUID REFERENCES workout_templates(id),
+      workout_date DATE NOT NULL,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_workout_logs_user_id ON workout_logs(user_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_workout_logs_date ON workout_logs(workout_date)`;
+
+  // Exercise logs
+  await sql`
+    CREATE TABLE IF NOT EXISTS exercise_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workout_log_id UUID NOT NULL REFERENCES workout_logs(id) ON DELETE CASCADE,
+      exercise_id UUID NOT NULL REFERENCES exercises(id),
+      template_exercise_id UUID REFERENCES template_exercises(id),
+      exercise_order INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_exercise_logs_workout ON exercise_logs(workout_log_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_exercise_logs_exercise ON exercise_logs(exercise_id)`;
+
+  // Set logs
+  await sql`
+    CREATE TABLE IF NOT EXISTS set_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      exercise_log_id UUID NOT NULL REFERENCES exercise_logs(id) ON DELETE CASCADE,
+      set_number INTEGER NOT NULL,
+      set_type TEXT DEFAULT 'working' CHECK (set_type IN ('warmup', 'working')),
+      weight_value DECIMAL(6, 2),
+      weight_unit TEXT DEFAULT 'lbs' CHECK (weight_unit IN ('lbs', 'kg')),
+      reps_completed INTEGER,
+      rir_actual INTEGER,
+      is_pr BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_set_logs_exercise ON set_logs(exercise_log_id)`;
+
+  dbInitialized = true;
+}
+
+// Common response headers
+export const headers = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+};
