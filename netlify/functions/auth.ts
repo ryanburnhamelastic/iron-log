@@ -50,11 +50,12 @@ export async function authenticateRequest(event: HandlerEvent): Promise<AuthResu
       clerkUserId: sub,
     };
   } catch (error) {
-    console.error('Token verification failed:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Token verification failed:', errorMessage, error);
     return {
       authenticated: false,
       clerkUserId: null,
-      error: 'Token verification failed',
+      error: `Token verification failed: ${errorMessage}`,
     };
   }
 }
