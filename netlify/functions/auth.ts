@@ -1,4 +1,4 @@
-import { createClerkClient } from '@clerk/backend';
+import { verifyToken } from '@clerk/backend';
 import type { HandlerEvent } from '@netlify/functions';
 
 export interface AuthResult {
@@ -32,12 +32,18 @@ export async function authenticateRequest(event: HandlerEvent): Promise<AuthResu
       };
     }
 
-    const clerk = createClerkClient({ secretKey });
+    // Verify the session token using the standalone verifyToken function
+    // authorizedParties helps protect against subdomain cookie leaking
+    const authorizedParties = process.env.CLERK_AUTHORIZED_PARTIES
+      ? process.env.CLERK_AUTHORIZED_PARTIES.split(',')
+      : undefined;
 
-    // Verify the session token
-    const { sub } = await clerk.verifyToken(token);
+    const verifiedToken = await verifyToken(token, {
+      secretKey,
+      authorizedParties,
+    });
 
-    if (!sub) {
+    if (!verifiedToken.sub) {
       return {
         authenticated: false,
         clerkUserId: null,
@@ -47,7 +53,7 @@ export async function authenticateRequest(event: HandlerEvent): Promise<AuthResu
 
     return {
       authenticated: true,
-      clerkUserId: sub,
+      clerkUserId: verifiedToken.sub,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
