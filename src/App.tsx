@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
 import { Programs } from './pages/Programs';
+import { ProgramDetail } from './pages/ProgramDetail';
 import { Workout } from './pages/Workout';
 import { Progress } from './pages/Progress';
 import { Settings } from './pages/Settings';
@@ -32,6 +33,7 @@ function App() {
               >
                 <Route path="/" element={<Home />} />
                 <Route path="/programs" element={<Programs />} />
+                <Route path="/programs/:id" element={<ProgramDetail />} />
                 <Route path="/workout" element={<Workout />} />
                 <Route path="/progress" element={<Progress />} />
                 <Route path="/settings" element={<Settings />} />

@@ -1,0 +1,280 @@
+import { useState, useEffect } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { programsApi, userProgramsApi } from '../lib/api';
+import type { ProgramWithBlocks } from '../types';
+import { LoadingSpinner } from '../components/common/LoadingSpinner';
+
+export function ProgramDetail() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [program, setProgram] = useState<ProgramWithBlocks | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
+  const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!id) return;
+
+    const fetchProgram = async () => {
+      setLoading(true);
+      const response = await programsApi.get(id);
+      if (response.data) {
+        setProgram(response.data);
+        // Expand the first block by default
+        if (response.data.blocks && response.data.blocks.length > 0) {
+          setExpandedBlocks(new Set([response.data.blocks[0].id]));
+        }
+      } else if (response.error) {
+        setError(response.error);
+      }
+      setLoading(false);
+    };
+
+    fetchProgram();
+  }, [id]);
+
+  const handleStartProgram = async () => {
+    if (!id) return;
+    setStarting(true);
+    const response = await userProgramsApi.start(id);
+    if (response.data) {
+      navigate('/');
+    } else if (response.error) {
+      setError(response.error);
+    }
+    setStarting(false);
+  };
+
+  const toggleBlock = (blockId: string) => {
+    setExpandedBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(blockId)) {
+        next.delete(blockId);
+      } else {
+        next.add(blockId);
+      }
+      return next;
+    });
+  };
+
+  const toggleWeek = (weekId: string) => {
+    setExpandedWeeks((prev) => {
+      const next = new Set(prev);
+      if (next.has(weekId)) {
+        next.delete(weekId);
+      } else {
+        next.add(weekId);
+      }
+      return next;
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-12">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error || !program) {
+    return (
+      <div className="space-y-4">
+        <Link
+          to="/programs"
+          className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to Programs
+        </Link>
+        <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-lg">
+          {error || 'Program not found'}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <div>
+          <Link
+            to="/programs"
+            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to Programs
+          </Link>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">{program.name}</h1>
+          {program.description && (
+            <p className="text-slate-600 dark:text-slate-400 mt-1">{program.description}</p>
+          )}
+          <div className="flex items-center gap-4 mt-2 text-sm text-slate-500 dark:text-slate-400">
+            <span>{program.frequency_per_week}x per week</span>
+            {program.source && <span>by {program.source}</span>}
+          </div>
+        </div>
+        <button
+          onClick={handleStartProgram}
+          disabled={starting}
+          className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg transition-colors flex items-center gap-2"
+        >
+          {starting ? (
+            <>
+              <LoadingSpinner size="sm" />
+              Starting...
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              Start Program
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Blocks */}
+      {program.blocks && program.blocks.length > 0 ? (
+        <div className="space-y-4">
+          {program.blocks.map((block) => (
+            <div
+              key={block.id}
+              className="bg-white dark:bg-slate-800 rounded-lg shadow-sm overflow-hidden"
+            >
+              {/* Block Header */}
+              <button
+                onClick={() => toggleBlock(block.id)}
+                className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+              >
+                <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                  {block.name}
+                </h2>
+                <svg
+                  className={`w-5 h-5 text-slate-400 transition-transform ${
+                    expandedBlocks.has(block.id) ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
+                </svg>
+              </button>
+
+              {/* Block Content */}
+              {expandedBlocks.has(block.id) && block.weeks && (
+                <div className="border-t border-slate-200 dark:border-slate-700">
+                  {block.weeks.map((week) => (
+                    <div key={week.id} className="border-b border-slate-100 dark:border-slate-700 last:border-b-0">
+                      {/* Week Header */}
+                      <button
+                        onClick={() => toggleWeek(week.id)}
+                        className="w-full px-6 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                            {week.name}
+                          </span>
+                          {week.week_type !== 'normal' && (
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full ${
+                                week.week_type === 'deload'
+                                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                  : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                              }`}
+                            >
+                              {week.week_type}
+                            </span>
+                          )}
+                        </div>
+                        <svg
+                          className={`w-4 h-4 text-slate-400 transition-transform ${
+                            expandedWeeks.has(week.id) ? 'rotate-180' : ''
+                          }`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 9l-7 7-7-7"
+                          />
+                        </svg>
+                      </button>
+
+                      {/* Week Content - Workouts */}
+                      {expandedWeeks.has(week.id) && week.workouts && (
+                        <div className="px-6 pb-4 space-y-4">
+                          {week.workouts.map((workout) => (
+                            <div
+                              key={workout.id}
+                              className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-4"
+                            >
+                              <h4 className="font-medium text-slate-800 dark:text-slate-200 mb-3">
+                                {workout.name}
+                              </h4>
+                              <div className="space-y-2">
+                                {workout.exercises?.map((templateExercise) => (
+                                  <div
+                                    key={templateExercise.id}
+                                    className="flex items-center justify-between text-sm"
+                                  >
+                                    <span className="text-slate-700 dark:text-slate-300">
+                                      {templateExercise.exercise?.name || 'Unknown Exercise'}
+                                    </span>
+                                    <span className="text-slate-500 dark:text-slate-400">
+                                      {templateExercise.working_sets} x {templateExercise.rep_range_min}-
+                                      {templateExercise.rep_range_max}
+                                      {templateExercise.rir !== null && ` @ ${templateExercise.rir} RIR`}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="bg-white dark:bg-slate-800 rounded-lg p-8 text-center shadow-sm">
+          <p className="text-slate-600 dark:text-slate-400">
+            This program has no workout data yet.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
