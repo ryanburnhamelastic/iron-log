@@ -20,6 +20,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { getToken } = useAuth();
   const [user, setUser] = useState<User | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [tokenGetterReady, setTokenGetterReady] = useState(false);
 
   // Set up the auth token getter for API calls
   useEffect(() => {
@@ -31,6 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return null;
       }
     });
+    setTokenGetterReady(true);
   }, [isSignedIn, getToken]);
 
   const fetchOrCreateUser = async () => {
@@ -73,13 +75,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Only fetch user after token getter is ready
   useEffect(() => {
-    if (clerkLoaded && isSignedIn) {
+    if (clerkLoaded && tokenGetterReady && isSignedIn) {
       fetchOrCreateUser();
-    } else if (clerkLoaded) {
+    } else if (clerkLoaded && !isSignedIn) {
       setIsLoaded(true);
     }
-  }, [clerkLoaded, isSignedIn, clerkUser?.id]);
+  }, [clerkLoaded, isSignedIn, clerkUser?.id, tokenGetterReady]);
 
   const value: AuthContextType = {
     isLoaded: clerkLoaded && isLoaded,
