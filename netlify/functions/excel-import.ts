@@ -226,7 +226,8 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
     // Detect Week headers (in column B)
     // Format: "Week 1" with "Exercise" in column C indicates start of actual week content
     // "Intro Week" or "Deload Week" alone (without "Exercise" in C) are just labels for the next week
-    if (lowerB.includes('week') && !lowerB.includes('per week')) {
+    // Skip notes that happen to contain "week"
+    if (lowerB.includes('week') && !lowerB.includes('per week') && !lowerB.includes('program notes') && colB.length < 50) {
       if (!currentBlock) {
         currentBlock = { blockNumber: 1, name: 'Block 1', weeks: [] };
         program.blocks.push(currentBlock);
@@ -239,15 +240,15 @@ function parseMinMaxProgram(workbook: XLSX.WorkBook): ParsedProgram {
 
         // Check if previous row was a label like "Intro Week" or "Deload Week"
         let weekType: 'intro' | 'normal' | 'deload' = 'normal';
-        let weekName = colB;
+        let weekName = colB; // e.g., "Week 1"
         if (i > 0 && data[i - 1]) {
           const prevB = String(data[i - 1][1] || '').toLowerCase();
           if (prevB.includes('intro')) {
             weekType = 'intro';
-            weekName = 'Intro Week';
+            weekName = colB + ' (Intro)'; // e.g., "Week 1 (Intro)"
           } else if (prevB.includes('deload')) {
             weekType = 'deload';
-            weekName = 'Deload Week';
+            weekName = colB + ' (Deload)'; // e.g., "Week 7 (Deload)"
           }
         }
 
