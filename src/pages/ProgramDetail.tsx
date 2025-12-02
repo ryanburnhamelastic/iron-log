@@ -38,10 +38,13 @@ export function ProgramDetail() {
   const handleStartProgram = async () => {
     if (!id) return;
     setStarting(true);
+    console.log('Starting program with id:', id);
     const response = await userProgramsApi.start(id);
+    console.log('Start program response:', response);
     if (response.data) {
       navigate('/');
     } else if (response.error) {
+      console.error('Start program error:', response.error);
       setError(response.error);
     }
     setStarting(false);
