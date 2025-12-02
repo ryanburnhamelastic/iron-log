@@ -1,8 +1,32 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthContext } from '../contexts/AuthContext';
+import { userProgramsApi } from '../lib/api';
+import type { UserProgram } from '../types';
+
+interface UserProgramWithDetails extends UserProgram {
+  program_name?: string;
+  frequency_per_week?: number;
+}
 
 export function Home() {
   const { userName, user } = useAuthContext();
+  const [activeProgram, setActiveProgram] = useState<UserProgramWithDetails | null>(null);
+  const [loadingProgram, setLoadingProgram] = useState(true);
+
+  useEffect(() => {
+    const fetchActiveProgram = async () => {
+      setLoadingProgram(true);
+      const response = await userProgramsApi.list();
+      if (response.data) {
+        const active = response.data.find((p: UserProgramWithDetails) => p.is_active);
+        setActiveProgram(active || null);
+      }
+      setLoadingProgram(false);
+    };
+
+    fetchActiveProgram();
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -64,15 +88,48 @@ export function Home() {
         <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-4">
           Current Program
         </h2>
-        <div className="text-center py-8 text-slate-500 dark:text-slate-400">
-          <p>No active program</p>
-          <Link
-            to="/programs"
-            className="text-blue-600 dark:text-blue-400 hover:underline mt-2 inline-block"
-          >
-            Browse programs
-          </Link>
-        </div>
+        {loadingProgram ? (
+          <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+            <p>Loading...</p>
+          </div>
+        ) : activeProgram ? (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-slate-800 dark:text-slate-100">
+                  {activeProgram.program_name || 'Program'}
+                </h3>
+                {activeProgram.frequency_per_week && (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {activeProgram.frequency_per_week}x per week
+                  </p>
+                )}
+              </div>
+              <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded-full">
+                Active
+              </span>
+            </div>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Started {new Date(activeProgram.started_at).toLocaleDateString()}
+            </p>
+            <Link
+              to={`/programs/${activeProgram.program_id}`}
+              className="text-blue-600 dark:text-blue-400 hover:underline text-sm"
+            >
+              View program details
+            </Link>
+          </div>
+        ) : (
+          <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+            <p>No active program</p>
+            <Link
+              to="/programs"
+              className="text-blue-600 dark:text-blue-400 hover:underline mt-2 inline-block"
+            >
+              Browse programs
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* Recent Workouts */}
