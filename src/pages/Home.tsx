@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuthContext } from '../contexts/AuthContext';
 import { userProgramsApi } from '../lib/api';
 import type { UserProgram } from '../types';
@@ -11,22 +11,27 @@ interface UserProgramWithDetails extends UserProgram {
 
 export function Home() {
   const { userName, user } = useAuthContext();
+  const location = useLocation();
   const [activeProgram, setActiveProgram] = useState<UserProgramWithDetails | null>(null);
   const [loadingProgram, setLoadingProgram] = useState(true);
 
-  useEffect(() => {
-    const fetchActiveProgram = async () => {
-      setLoadingProgram(true);
-      const response = await userProgramsApi.list();
-      if (response.data) {
-        const active = response.data.find((p: UserProgramWithDetails) => p.is_active);
-        setActiveProgram(active || null);
-      }
-      setLoadingProgram(false);
-    };
-
-    fetchActiveProgram();
+  const fetchActiveProgram = useCallback(async () => {
+    setLoadingProgram(true);
+    const response = await userProgramsApi.list();
+    console.log('Home: userProgramsApi.list() response:', response);
+    if (response.data) {
+      const active = response.data.find((p: UserProgramWithDetails) => p.is_active);
+      console.log('Home: active program:', active);
+      setActiveProgram(active || null);
+    }
+    setLoadingProgram(false);
   }, []);
+
+  // Fetch every time the component renders (location.key changes on navigation)
+  useEffect(() => {
+    console.log('Home: useEffect triggered, location.key:', location.key);
+    fetchActiveProgram();
+  }, [fetchActiveProgram, location.key]);
 
   return (
     <div className="space-y-6">
