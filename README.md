@@ -1,73 +1,99 @@
-# React + TypeScript + Vite
+# Iron Log
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A progressive web app for tracking workouts and strength training progress.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Program Management**: Import workout programs from Excel files (e.g., Jeff Nippard's Min-Max Program)
+- **Workout Tracking**: Log sets, reps, and weight for each exercise
+- **Progress Tracking**: Monitor your strength gains over time
+- **PWA Support**: Install on mobile devices for offline access
+- **Dark Mode**: Easy on the eyes during those late-night gym sessions
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Frontend**: React 19, TypeScript, Tailwind CSS
+- **Backend**: Netlify Functions (serverless)
+- **Database**: Neon PostgreSQL (serverless)
+- **Authentication**: Clerk
+- **Build Tool**: Vite
+- **PWA**: vite-plugin-pwa with Workbox
 
-## Expanding the ESLint configuration
+## Getting Started
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Prerequisites
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- Node.js 18+
+- npm
+- Neon database account
+- Clerk account
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### Environment Variables
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Create a `.env` file in the root directory:
+
+```env
+# Clerk Authentication
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+
+# Database
+DATABASE_URL=postgresql://...
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Installation
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+```bash
+# Install dependencies
+npm install
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
 ```
+
+### Database Setup
+
+Run the schema migrations in `schema.sql` against your Neon database.
+
+## Project Structure
+
+```
+iron-log/
+├── src/
+│   ├── components/     # Reusable UI components
+│   ├── contexts/       # React context providers
+│   ├── lib/            # API client and utilities
+│   ├── pages/          # Page components
+│   └── types/          # TypeScript type definitions
+├── netlify/
+│   └── functions/      # Serverless API endpoints
+├── public/             # Static assets and PWA icons
+└── index.html
+```
+
+## API Endpoints
+
+- `GET/POST /api/users` - User management
+- `GET/POST /api/programs` - Program CRUD
+- `GET /api/programs/:id` - Program details with blocks/weeks/workouts
+- `POST /api/excel-import` - Import programs from Excel
+- `GET/POST /api/user-programs` - User's enrolled programs
+- `GET/POST /api/workout-logs` - Workout session logs
+- `POST /api/exercise-logs` - Exercise logs within workouts
+- `POST /api/set-logs` - Individual set logs
+
+## Deployment
+
+The app is configured for Netlify deployment:
+
+```bash
+# Deploy to Netlify
+netlify deploy --prod
+```
+
+## License
+
+MIT
