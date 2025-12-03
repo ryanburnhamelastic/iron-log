@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { userProgramsApi, programsApi } from '../lib/api';
+import { userProgramsApi, programsApi, workoutLogsApi } from '../lib/api';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
 import type { UserProgram, ProgramWithBlocks, WorkoutTemplateWithExercises } from '../types';
 
@@ -14,6 +14,8 @@ export function Workout() {
   const [activeProgram, setActiveProgram] = useState<UserProgramWithDetails | null>(null);
   const [programDetails, setProgramDetails] = useState<ProgramWithBlocks | null>(null);
   const [currentWeekWorkouts, setCurrentWeekWorkouts] = useState<WorkoutTemplateWithExercises[]>([]);
+  const [selectedWorkout, setSelectedWorkout] = useState<WorkoutTemplateWithExercises | null>(null);
+  const [startingWorkout, setStartingWorkout] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -53,10 +55,106 @@ export function Workout() {
     fetchData();
   }, []);
 
+  const handleStartWorkout = async (workout: WorkoutTemplateWithExercises) => {
+    if (!activeProgram) return;
+    setStartingWorkout(true);
+
+    // Create a workout log
+    const response = await workoutLogsApi.create({
+      user_program_id: activeProgram.id,
+      workout_template_id: workout.id,
+      workout_date: new Date().toISOString().split('T')[0],
+    });
+
+    if (response.data) {
+      setSelectedWorkout(workout);
+    }
+    setStartingWorkout(false);
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
         <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  // Active workout view
+  if (selectedWorkout) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+            {selectedWorkout.name}
+          </h1>
+          <button
+            onClick={() => setSelectedWorkout(null)}
+            className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+          >
+            End Workout
+          </button>
+        </div>
+
+        {/* Exercise List */}
+        <div className="space-y-4">
+          {selectedWorkout.exercises?.map((templateExercise, index) => (
+            <div
+              key={templateExercise.id}
+              className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm"
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <h3 className="font-semibold text-slate-800 dark:text-slate-100">
+                    {index + 1}. {templateExercise.exercise?.name || 'Exercise'}
+                  </h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {templateExercise.working_sets} sets × {templateExercise.rep_range_min}-{templateExercise.rep_range_max} reps
+                    {templateExercise.rir !== null && ` @ ${templateExercise.rir} RIR`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Set inputs */}
+              <div className="space-y-2">
+                {Array.from({ length: templateExercise.working_sets }).map((_, setIndex) => (
+                  <div
+                    key={setIndex}
+                    className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg"
+                  >
+                    <span className="text-sm font-medium text-slate-500 dark:text-slate-400 w-16">
+                      Set {setIndex + 1}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        placeholder="lbs"
+                        className="w-20 px-3 py-2 text-center border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100"
+                      />
+                      <span className="text-slate-400">×</span>
+                      <input
+                        type="number"
+                        placeholder="reps"
+                        className="w-20 px-3 py-2 text-center border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100"
+                      />
+                    </div>
+                    <button className="ml-auto px-3 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg">
+                      Log
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Finish Workout Button */}
+        <button
+          onClick={() => setSelectedWorkout(null)}
+          className="w-full px-4 py-4 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors"
+        >
+          Finish Workout
+        </button>
       </div>
     );
   }
@@ -89,7 +187,9 @@ export function Workout() {
                 {currentWeekWorkouts.map((workout) => (
                   <button
                     key={workout.id}
-                    className="w-full text-left p-4 bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                    onClick={() => handleStartWorkout(workout)}
+                    disabled={startingWorkout}
+                    className="w-full text-left p-4 bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50"
                   >
                     <div className="flex items-center justify-between">
                       <div>
@@ -100,19 +200,23 @@ export function Workout() {
                           {workout.exercises?.length || 0} exercises
                         </p>
                       </div>
-                      <svg
-                        className="w-5 h-5 text-slate-400"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 5l7 7-7 7"
-                        />
-                      </svg>
+                      {startingWorkout ? (
+                        <LoadingSpinner size="sm" />
+                      ) : (
+                        <svg
+                          className="w-5 h-5 text-slate-400"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M9 5l7 7-7 7"
+                          />
+                        </svg>
+                      )}
                     </div>
                   </button>
                 ))}
